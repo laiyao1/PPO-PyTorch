@@ -13,6 +13,7 @@ import gym
 
 from PPO_place import PPO
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 ################################### Training ###################################
@@ -77,7 +78,7 @@ def train():
     state_dim = None # 
     graph_emb_dim = placedb.node_cnt
     print("===graph_emb_dim = {} ===", graph_emb_dim)
-    graph = place_env.graph
+    graph = place_env.graph.to(device)
     print("===graph node num = {} ===", graph.num_nodes())
 
     # action space dimension
@@ -228,8 +229,10 @@ def train():
 
             # select action with policy
             now_node_id = state[1]
-            state_input = now_node_id # (now_node_id, env.graph)
-            action = ppo_agent.select_action(state_input, graph)
+            canvas = torch.flatten(state[0])
+            state_input = torch.cat(now_node_id, canvas)# now_node_id
+            # state_input = torch.tensor([now_node_id], dtype = torch.int32) # (now_node_id, env.graph)
+            action = ppo_agent.select_action(state_input)
             state, reward, done, _ = place_env.step(action)
             # print("====state :", state)
             # saving reward and is_terminals

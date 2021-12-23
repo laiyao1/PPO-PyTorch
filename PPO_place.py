@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.distributions import MultivariateNormal
 from torch.distributions import Categorical
 from gcn import PlaceGCN
+import torchvision.models as models
 
 
 ################################## set device ##################################
@@ -56,7 +57,7 @@ class ActorCritic(nn.Module):
             self.action_var = torch.full((action_dim,), action_std_init * action_std_init).to(device)
 
         # gcn
-        self.gcn = PlaceGCN(graph_emb_dim)
+        self.gcn = PlaceGCN(graph_emb_dim).to(device)
         # actor
         self.actor = nn.Sequential(
                         nn.Linear(32, 64),
@@ -92,10 +93,13 @@ class ActorCritic(nn.Module):
         raise NotImplementedError
     
 
-    def act(self, state, graph):
-        one_hot_input = torch.eye(graph.num_nodes())
-        gcn_res = self.gcn(graph, one_hot_input)
-        action_probs = self.actor(gcn_res[state, :])
+    def act(self, state):
+        one_hot_input = torch.eye(self.graph.num_nodes()).to(device)
+        gcn_res = self.gcn(self.graph, one_hot_input)
+        resnet18 = models.resnet18()
+        grid = int((state.shape[0]-1) ** 0.5)
+        cnn_res = resnet18(state[1:].reshape(grid, grid))
+        action_probs = self.actor(gcn_res[state[0], :])
         dist = Categorical(action_probs)
 
         action = dist.sample()
@@ -104,15 +108,18 @@ class ActorCritic(nn.Module):
         return action.detach(), action_logprob.detach()
     
 
-    def evaluate(self, state, graph, action):
-        one_hot_input = torch.eye(graph.num_nodes())
-        gcn_res = self.gcn(graph, one_hot_input)
-        action_probs = self.actor(gcn_res[state, :])
+    def evaluate(self, state, action):
+        print("===evaluate state===")
+        print(state)
+        print("state shape", state.shape)
+        one_hot_input = torch.eye(self.graph.num_nodes()).to(device)
+        gcn_res = self.gcn(self.graph, one_hot_input)
+        action_probs = self.actor(torch.index_select(gcn_res, 0, state))
         dist = Categorical(action_probs)
 
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
-        state_values = self.critic(state)
+        state_values = self.critic(torch.index_select(gcn_res, 0, state))
         
         return action_logprobs, state_values, dist_entropy
 
@@ -142,6 +149,7 @@ class PPO:
         self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
+        self.graph = graph
 
 
     def set_action_std(self, new_action_std):
@@ -176,14 +184,14 @@ class PPO:
         print("--------------------------------------------------------------------------------------------")
 
 
-    def select_action(self, state, graph):
+    def select_action(self, state):
 
         if self.has_continuous_action_space:
             with torch.no_grad():
                 # state = torch.FloatTensor(state).to(device)
-                action, action_logprob = self.policy_old.act(state, graph)
+                action, action_logprob = self.policy_old.act(state)
             # print("===state", state)
-            self.buffer.states.append(state)
+            self.buffer.states.append(torch.tensor([state], dtype = torch.int32))
             self.buffer.actions.append(action)
             self.buffer.logprobs.append(action_logprob)
 
@@ -192,9 +200,9 @@ class PPO:
         else:
             with torch.no_grad():
                 # state = torch.FloatTensor(state).to(device)
-                action, action_logprob = self.policy_old.act(state, graph)
+                action, action_logprob = self.policy_old.act(state)
             # print("===state", state)
-            self.buffer.states.append(state)
+            self.buffer.states.append(torch.tensor([state], dtype = torch.int32))
             self.buffer.actions.append(action)
             self.buffer.logprobs.append(action_logprob)
 
@@ -216,7 +224,9 @@ class PPO:
         rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
 
-        # convert list to tensor
+        # convert list to 
+        # print("===self.buffer.states===")
+        # print(self.buffer.states)
         old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
         old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
         old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
