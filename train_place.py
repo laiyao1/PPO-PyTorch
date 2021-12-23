@@ -228,12 +228,18 @@ def train():
         for t in range(1, max_ep_len+1):
 
             # select action with policy
-            now_node_id = state[1]
-            canvas = torch.flatten(state[0])
-            state_input = torch.cat(now_node_id, canvas)# now_node_id
+            # print("state[1]", state[1])
+            # print("now_node_id = {}".format(state[1]))
+            now_node_id = torch.Tensor([state[1]]).reshape(1)
+            canvas = torch.flatten(torch.from_numpy(state[0]))
+            # print("now_node_id shape", now_node_id.shape)
+            # print("canvas shape", canvas.shape)
+            state_input = torch.cat((now_node_id, canvas)) # now_node_id
             # state_input = torch.tensor([now_node_id], dtype = torch.int32) # (now_node_id, env.graph)
             action = ppo_agent.select_action(state_input)
+            # print("action = {}".format(action))
             state, reward, done, _ = place_env.step(action)
+            # print("node_pos", state[3])
             # print("====state :", state)
             # saving reward and is_terminals
             ppo_agent.buffer.rewards.append(reward)

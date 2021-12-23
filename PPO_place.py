@@ -4,7 +4,7 @@ from torch.distributions import MultivariateNormal
 from torch.distributions import Categorical
 from gcn import PlaceGCN
 import torchvision.models as models
-
+from resnet import resnet20
 
 ################################## set device ##################################
 
@@ -60,17 +60,17 @@ class ActorCritic(nn.Module):
         self.gcn = PlaceGCN(graph_emb_dim).to(device)
         # actor
         self.actor = nn.Sequential(
-                        nn.Linear(32, 64),
+                        nn.Linear(32 + 64, 64), # GCN + CNN
                         nn.Tanh(),
                         nn.Linear(64, 64),
                         nn.Tanh(),
                         nn.Linear(64, action_dim),
-                        nn.Softmax(dim=-1)
+                        # nn.Softmax(dim=-1)
         )
         
         # critic
         self.critic = nn.Sequential(
-                        nn.Linear(32, 64),
+                        nn.Linear(32 + 64, 64),
                         nn.Tanh(),
                         nn.Linear(64, 64),
                         nn.Tanh(),
@@ -78,6 +78,8 @@ class ActorCritic(nn.Module):
                     )
         
         self.graph = graph
+        self.resnet = resnet20().to(device)
+        self.softmax = nn.Softmax(dim=-1)
         
     def set_action_std(self, new_action_std):
 
@@ -96,10 +98,24 @@ class ActorCritic(nn.Module):
     def act(self, state):
         one_hot_input = torch.eye(self.graph.num_nodes()).to(device)
         gcn_res = self.gcn(self.graph, one_hot_input)
-        resnet18 = models.resnet18()
-        grid = int((state.shape[0]-1) ** 0.5)
-        cnn_res = resnet18(state[1:].reshape(grid, grid))
-        action_probs = self.actor(gcn_res[state[0], :])
+        grid = int((state.shape[-1]-1) ** 0.5)
+        cnn_input = state[1:].reshape(1, 1, grid, grid).float().to(device)
+        # print("cnn_input", cnn_input)
+        cnn_res = self.resnet(cnn_input)
+        gcn_res = gcn_res[state[0].int()]
+        gcn_res = gcn_res.squeeze()
+        cnn_res = cnn_res.squeeze()
+        # print("gcn_res shape", gcn_res.shape)
+        # print("cnn_res shape", cnn_res.shape)
+        cat_feature = torch.cat((gcn_res, cnn_res)).to(device)
+        # print("cat feature", cat_feature)
+        action_probs_tmp = self.actor(cat_feature)
+        mask = state[1:].float().to(device)
+        # print("mask sum = {}".format(mask.sum()))
+        # print("mask", mask)
+        # print("mask shape", mask.shape)
+        action_probs = self.softmax(action_probs_tmp - 1.0e8 * mask)
+        # print("action_probs", action_probs)
         dist = Categorical(action_probs)
 
         action = dist.sample()
@@ -109,17 +125,30 @@ class ActorCritic(nn.Module):
     
 
     def evaluate(self, state, action):
-        print("===evaluate state===")
-        print(state)
-        print("state shape", state.shape)
+        # print("===evaluate state===")
+        # print(state)
+        # print("state shape", state.shape)
         one_hot_input = torch.eye(self.graph.num_nodes()).to(device)
         gcn_res = self.gcn(self.graph, one_hot_input)
-        action_probs = self.actor(torch.index_select(gcn_res, 0, state))
+        grid = int((state.shape[-1] - 1) ** 0.5)
+        # print("state shape", state.shape)
+        cnn_input = state[:, 1:].reshape(-1, 1, grid, grid).float().to(device)
+        # print("cnn_input shape", cnn_input.shape)
+        cnn_res = self.resnet(cnn_input)
+        # print("cnn_res shape", cnn_res.shape)
+        gcn_res = torch.index_select(gcn_res, 0, state[:, 0].int().squeeze())
+        # print("gcn_res shape", gcn_res.shape)
+        gcn_res = gcn_res.squeeze()
+        cnn_res = cnn_res.squeeze()
+        cat_feature = torch.cat((gcn_res, cnn_res), dim = -1)
+        action_probs_tmp = self.actor(cat_feature)
+        mask = state[:, 1:].float().to(device)
+        action_probs = self.softmax(mask * action_probs_tmp)
         dist = Categorical(action_probs)
 
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
-        state_values = self.critic(torch.index_select(gcn_res, 0, state))
+        state_values = self.critic(cat_feature)
         
         return action_logprobs, state_values, dist_entropy
 
@@ -202,7 +231,7 @@ class PPO:
                 # state = torch.FloatTensor(state).to(device)
                 action, action_logprob = self.policy_old.act(state)
             # print("===state", state)
-            self.buffer.states.append(torch.tensor([state], dtype = torch.int32))
+            self.buffer.states.append(state)
             self.buffer.actions.append(action)
             self.buffer.logprobs.append(action_logprob)
 
