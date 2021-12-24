@@ -50,8 +50,8 @@ class PlaceEnv(gym.Env):
                 max_x = max(max_x, node_pos[node_name][0])
                 max_y = max(max_y, node_pos[node_name][1])
             # print("min_x = {}, min_y = {}, max_x = {}, max_y = {}".format(min_x, min_y, max_x, max_y))
-            simple_hpwl += (max_x - min_x) + (max_y - min_y)
-        return simple_hpwl * (self.max_height / self.grid)
+            simple_hpwl += (max_x - min_x + 1) + (max_y - min_y + 1) # range [0, 64]
+        return simple_hpwl # * (self.max_height / self.grid)
         
     # hpwl within pin offset
     def comp_hpwl(self):
@@ -67,7 +67,7 @@ class PlaceEnv(gym.Env):
         y = action % self.grid
 
         if canvas[x][y] == 1:
-            reward = -1e8
+            reward = 0
             done = True
         else:
             canvas[x][y] = 1
@@ -75,11 +75,11 @@ class PlaceEnv(gym.Env):
             num_macro_placed += 1
             
             if num_macro_placed == num_macro:
-                reward = -self.comp_simple_hpwl(node_pos)
+                reward = self.grid * 2 * len(self.placedb.net_info)  - self.comp_simple_hpwl(node_pos)
                 print("reward = {}".format(reward))
                 done = True
             else:
-                reward = -1e8
+                reward = 0
                 done = False
         
         self.state = (canvas, num_macro_placed, num_macro, node_pos)
